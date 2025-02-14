@@ -1,80 +1,82 @@
-/** @typedef {import('pear-interface')} */ /* global Pear */
-document.querySelector('h1').addEventListener('click', (e) => { e.target.innerHTML = '🍐' });
 
-const pear = new Pear();
-const createChatRoomButton = document.getElementById('create-chat-room');
-const joinForm = document.getElementById('join-form');
-const joinChatRoomButton = document.getElementById('join-chat-room');
-const joinChatRoomTopicInput = document.getElementById('join-chat-room-topic');
-const loadingDiv = document.getElementById('loading');
-const chatDiv = document.getElementById('chat');
-const chatRoomTopicSpan = document.getElementById('chat-room-topic');
-const peersCountSpan = document.getElementById('peers-count');
-const messagesDiv = document.getElementById('messages');
-const messageForm = document.getElementById('message-form');
-const messageInput = document.getElementById('message');
+// For interactive documentation and code auto-completion in editor
+/** @typedef {import('pear-interface')} */ 
 
-let topic = null;
-let peers = new Set();
+/* global Pear */
+import Hyperswarm from 'hyperswarm'   // Module for P2P networking and connecting peers
+import crypto from 'hypercore-crypto' // Cryptographic functions for generating the key in app
+import b4a from 'b4a'                 // Module for buffer-to-string and vice-versa conversions 
+const { teardown, updates } = Pear    // Functions for cleanup and updates
 
-function showLoading() {
-    loadingDiv.classList.remove('hidden');
-    chatDiv.classList.add('hidden');
+const swarm = new Hyperswarm()
+
+// Unannounce the public key before exiting the process
+// (This is not a requirement, but it helps avoid DHT pollution)
+teardown(() => swarm.destroy())
+
+// Enable automatic reloading for the app
+// This is optional but helpful during production
+updates(() => Pear.reload())
+
+// When there's a new connection, listen for new messages, and add them to the UI
+swarm.on('connection', (peer) => {
+  // name incoming peers after first 6 chars of its public key as hex
+  const name = b4a.toString(peer.remotePublicKey, 'hex').substr(0, 6)
+  peer.on('data', message => onMessageAdded(name, message))
+  peer.on('error', e => console.log(`Connection error: ${e}`))
+})
+
+// When there's updates to the swarm, update the peers count
+swarm.on('update', () => {
+  document.querySelector('#peers-count').textContent = swarm.connections.size
+})
+
+document.querySelector('#create-chat-room').addEventListener('click', createChatRoom)
+document.querySelector('#join-form').addEventListener('submit', joinChatRoom)
+document.querySelector('#message-form').addEventListener('submit', sendMessage)
+
+async function createChatRoom() {
+  // Generate a new random topic (32 byte string)
+  const topicBuffer = crypto.randomBytes(32)
+  joinSwarm(topicBuffer)
 }
 
-function showChat() {
-    loadingDiv.classList.add('hidden');
-    chatDiv.classList.remove('hidden');
+async function joinChatRoom (e) {
+  e.preventDefault()
+  const topicStr = document.querySelector('#join-chat-room-topic').value
+  const topicBuffer = b4a.from(topicStr, 'hex')
+  joinSwarm(topicBuffer)
 }
 
-function updatePeersCount() {
-    peersCountSpan.textContent = peers.size;
+async function joinSwarm (topicBuffer) {
+  document.querySelector('#setup').classList.add('hidden')
+  document.querySelector('#loading').classList.remove('hidden')
+
+  // Join the swarm with the topic. Setting both client/server to true means that this app can act as both.
+  const discovery = swarm.join(topicBuffer, { client: true, server: true })
+  await discovery.flushed()
+
+  const topic = b4a.toString(topicBuffer, 'hex')
+  document.querySelector('#chat-room-topic').innerText = topic
+  document.querySelector('#loading').classList.add('hidden')
+  document.querySelector('#chat').classList.remove('hidden')
 }
 
-function addMessage(message) {
-    const messageElement = document.createElement('div');
-    messageElement.textContent = message;
-    messagesDiv.appendChild(messageElement);
+function sendMessage (e) {
+  const message = document.querySelector('#message').value
+  document.querySelector('#message').value = ''
+  e.preventDefault()
+
+  onMessageAdded('You', message)
+
+  // Send the message to all peers (that you are connected to)
+  const peers = [...swarm.connections]
+  for (const peer of peers) peer.write(message)
 }
 
-createChatRoomButton.addEventListener('click', () => {
-    topic = crypto.randomBytes(32).toString('hex');
-    chatRoomTopicSpan.textContent = topic;
-    showLoading();
-    pear.join(topic);
-});
-
-joinForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    topic = joinChatRoomTopicInput.value;
-    chatRoomTopicSpan.textContent = topic;
-    showLoading();
-    pear.join(topic);
-});
-
-pear.on('connection', (peer) => {
-    peers.add(peer);
-    updatePeersCount();
-
-    peer.on('data', (data) => {
-        const message = data.toString();
-        addMessage(message);
-    });
-
-    peer.on('close', () => {
-        peers.delete(peer);
-        updatePeersCount();
-    });
-});
-
-messageForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const message = messageInput.value;
-    addMessage(`You: ${message}`);
-    peers.forEach(peer => peer.send(message));
-    messageInput.value = '';
-});
-
-pear.on('ready', () => {
-    showChat();
-});
+// appends element to #messages element with content set to sender and message
+function onMessageAdded (from, message) {
+  const $div = document.createElement('div')
+  $div.textContent = `<${from}> ${message}`
+  document.querySelector('#messages').appendChild($div)
+}
