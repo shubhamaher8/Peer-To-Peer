@@ -1,8 +1,8 @@
 {
-  "name": "Peer-To-Peer",
+  "name": "peer-to-peer",
   "main": "index.html",
   "pear": {
-    "name": "Peer-To-Peer",
+    "name": "peer-to-peer",
     "type": "desktop",
     "gui": {
       "backgroundColor": "#1F2430",
